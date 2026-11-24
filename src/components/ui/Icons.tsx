@@ -298,3 +298,25 @@ export function IconCloud(props: IconProps) {
     </SvgIcon>
   );
 }
+
+export function IconFullscreen(props: IconProps) {
+  return (
+    <SvgIcon {...props}>
+      <path d="M4 9V4h5" />
+      <path d="M20 9V4h-5" />
+      <path d="M4 15v5h5" />
+      <path d="M20 15v5h-5" />
+    </SvgIcon>
+  );
+}
+
+export function IconFullscreenExit(props: IconProps) {
+  return (
+    <SvgIcon {...props}>
+      <path d="M9 4v5H4" />
+      <path d="M15 4v5h5" />
+      <path d="M9 20v-5H4" />
+      <path d="M15 20v-5h5" />
+    </SvgIcon>
+  );
+}

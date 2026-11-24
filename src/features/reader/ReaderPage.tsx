@@ -38,6 +38,7 @@ import {
   useChapterLoader,
 } from './useChapterLoader';
 import { useProgressSync } from './useProgressSync';
+import { useFullscreen } from './useFullscreen';
 import { useReaderInput } from './useReaderInput';
 
 export interface ReaderPageProps {
@@ -90,6 +91,16 @@ export function ReaderPage({
   });
 
   const paginatedRef = useRef<PaginatedReaderHandle>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  const {
+    supported: fullscreenSupported,
+    isFullscreen,
+    toggle: toggleFullscreen,
+  } = useFullscreen({
+    target: rootRef,
+    onError: (message) => toast.error(message),
+  });
 
   // Ensure bookshelf is loaded if user directly opened /read?url=...
   useEffect(() => {
@@ -275,6 +286,7 @@ export function ReaderPage({
       setAaOpen(false);
       setLightboxImg(null);
     },
+    onToggleFullscreen: toggleFullscreen,
   });
 
   const resolvedReaderTheme =
@@ -346,6 +358,7 @@ export function ReaderPage({
 
   return (
     <div
+      ref={rootRef}
       data-reader-theme={resolvedReaderTheme}
       style={{
         ...readerVars,
@@ -465,6 +478,9 @@ export function ReaderPage({
         chapters={chapters}
         chapterIndex={chapterIndex}
         refreshingToc={tocRefreshing}
+        fullscreenSupported={fullscreenSupported}
+        isFullscreen={isFullscreen}
+        onToggleFullscreen={toggleFullscreen}
         onBack={handleBackToShelf}
         onRefreshToc={() => void handleRefreshToc()}
         onOpenToc={() => {

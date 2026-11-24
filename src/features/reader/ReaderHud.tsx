@@ -5,6 +5,8 @@ import { IconButton } from '@/components/ui/IconButton';
 import {
   IconChevronLeft,
   IconChevronRight,
+  IconFullscreen,
+  IconFullscreenExit,
   IconRefresh,
   IconToc,
 } from '@/components/ui/Icons';
@@ -16,6 +18,9 @@ export interface ReaderHudProps {
   chapters: BookChapter[];
   chapterIndex: number;
   refreshingToc: boolean;
+  fullscreenSupported: boolean;
+  isFullscreen: boolean;
+  onToggleFullscreen: () => void;
   onBack: () => void;
   onRefreshToc: () => void;
   onOpenToc: () => void;
@@ -32,6 +37,9 @@ export function ReaderHud({
   chapters,
   chapterIndex,
   refreshingToc,
+  fullscreenSupported,
+  isFullscreen,
+  onToggleFullscreen,
   onBack,
   onRefreshToc,
   onOpenToc,
@@ -99,6 +107,22 @@ export function ReaderHud({
         >
           <IconToc size={18} />
         </IconButton>
+
+        {fullscreenSupported && (
+          <IconButton
+            ariaLabel={isFullscreen ? '退出全屏' : '进入全屏'}
+            tooltip={isFullscreen ? '退出全屏 (F)' : '进入全屏 (F)'}
+            surface="reader"
+            active={isFullscreen}
+            onClick={onToggleFullscreen}
+          >
+            {isFullscreen ? (
+              <IconFullscreenExit size={18} />
+            ) : (
+              <IconFullscreen size={18} />
+            )}
+          </IconButton>
+        )}
 
         {typographyTrigger}
       </div>

@@ -15,6 +15,7 @@ export interface UseReaderInputOptions {
   onToggleToc: () => void;
   onToggleAa: () => void;
   onCloseOverlay: () => void;
+  onToggleFullscreen: () => void;
 }
 
 function isEditableElement(target: EventTarget | null): boolean {
@@ -60,6 +61,11 @@ export function useReaderInput(options: UseReaderInputOptions) {
       if (lower === 'a') {
         e.preventDefault();
         opts.onToggleAa();
+        return;
+      }
+      if (lower === 'f') {
+        e.preventDefault();
+        opts.onToggleFullscreen();
         return;
       }
       if (e.key === '[') {
