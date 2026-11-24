@@ -1,0 +1,194 @@
+/* ==========================================================================
+   Apple HIG / Apple Books Design Tokens (Layer 0 - Layer 3)
+   ========================================================================== */
+:root {
+  /* Typography Stacks */
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC",
+    "Hiragino Sans GB", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+  --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display",
+    "PingFang SC", "Hiragino Sans GB", sans-serif;
+  --font-serif: "Songti SC", "STSong", "Noto Serif CJK SC",
+    "Source Han Serif SC", "SimSun", Georgia, serif;
+  --font-kai: "Kaiti SC", "STKaiti", "BiauKai", "KaiTi", "FangSong", serif;
+
+  /* Semantic Accent & Status */
+  --accent: #0071e3;
+  --accent-hover: #0077ed;
+  --accent-soft: rgba(0, 113, 227, 0.12);
+  --danger: #ff3b30;
+  --danger-hover: #e5352b;
+  --danger-soft: rgba(255, 59, 48, 0.12);
+  --success: #34c759;
+  --success-soft: rgba(52, 199, 89, 0.15);
+  --warning: #ff9f0a;
+
+  /* Layer 0-3 Materials (Light Mode) */
+  --l0-bg: #f5f5f7;
+  --l1-bg: #ffffff;
+  --l1-bg-subtle: rgba(255, 255, 255, 0.84);
+  --l1-border: rgba(0, 0, 0, 0.075);
+  --l1-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 14px rgba(0, 0, 0, 0.035);
+  --cover-shadow: 0 2px 5px rgba(0, 0, 0, 0.09), 0 10px 24px rgba(0, 0, 0, 0.12);
+  --cover-shadow-hover: 0 5px 12px rgba(0, 0, 0, 0.12), 0 18px 38px rgba(0, 0, 0, 0.18);
+
+  --l2-glass: rgba(248, 248, 250, 0.78);
+  --l2-glass-solid: rgba(255, 255, 255, 0.94);
+  --l2-border: rgba(0, 0, 0, 0.085);
+  --l2-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.78);
+  --l2-shadow: 0 12px 36px rgba(0, 0, 0, 0.11), 0 1px 3px rgba(0, 0, 0, 0.06);
+
+  --l3-scrim: rgba(15, 15, 20, 0.34);
+  --l3-bg: rgba(255, 255, 255, 0.94);
+  --l3-shadow: 0 24px 64px rgba(0, 0, 0, 0.2), 0 4px 16px rgba(0, 0, 0, 0.08);
+
+  /* Ink & Controls */
+  --ink-primary: #1d1d1f;
+  --ink-secondary: #6e6e73;
+  --ink-tertiary: #86868b;
+  --fill-control: rgba(118, 118, 128, 0.11);
+  --fill-control-hover: rgba(118, 118, 128, 0.18);
+  --divider: rgba(60, 60, 67, 0.11);
+
+  /* Geometry & Motion */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 18px;
+  --radius-xl: 22px;
+  --radius-pill: 9999px;
+  --ease-apple: cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* Reader Theme Defaults (white) */
+  --r-bg: #ffffff;
+  --r-ink: #1d1d1f;
+  --r-ink-muted: #7a7a80;
+  --r-glass: rgba(255, 255, 255, 0.8);
+  --r-glass-border: rgba(0, 0, 0, 0.085);
+  --r-glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.85);
+  --r-panel-bg: rgba(252, 252, 254, 0.93);
+  --r-control: rgba(118, 118, 128, 0.11);
+  --r-control-hover: rgba(118, 118, 128, 0.18);
+  --r-divider: rgba(0, 0, 0, 0.08);
+  --r-progress: #0071e3;
+
+  /* 12 Live Reader Typography & Margin Tokens */
+  --r-font: var(--font-serif);
+  --r-size: 19px;
+  --r-weight: 400;
+  --r-letter-spacing: 0.015em;
+  --r-lh: 1.82;
+  --r-para-gap: 16px;
+  --r-indent: 2em;
+  --r-align: justify;
+  --r-max-width: 720px;
+  --r-pad-x: 32px;
+  --r-pad-y: 20px;
+  --r-col-gap: 48px;
+}
+
+html[data-ui-theme="dark"] {
+  --accent: #0a84ff;
+  --accent-hover: #409cff;
+  --accent-soft: rgba(10, 132, 255, 0.22);
+  --danger: #ff453a;
+  --danger-hover: #ff6961;
+  --danger-soft: rgba(255, 69, 58, 0.2);
+  --success: #30d158;
+  --success-soft: rgba(48, 209, 88, 0.2);
+  --warning: #ff9f0a;
+
+  --l0-bg: #000000;
+  --l1-bg: #1c1c1e;
+  --l1-bg-subtle: rgba(28, 28, 30, 0.84);
+  --l1-border: rgba(255, 255, 255, 0.095);
+  --l1-shadow: 0 2px 12px rgba(0, 0, 0, 0.45);
+  --cover-shadow: 0 3px 8px rgba(0, 0, 0, 0.48), 0 12px 30px rgba(0, 0, 0, 0.56);
+  --cover-shadow-hover: 0 6px 14px rgba(0, 0, 0, 0.58), 0 20px 44px rgba(0, 0, 0, 0.72);
+
+  --l2-glass: rgba(28, 28, 30, 0.78);
+  --l2-glass-solid: rgba(34, 34, 38, 0.94);
+  --l2-border: rgba(255, 255, 255, 0.12);
+  --l2-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.09);
+  --l2-shadow: 0 14px 40px rgba(0, 0, 0, 0.58);
+
+  --l3-scrim: rgba(0, 0, 0, 0.62);
+  --l3-bg: rgba(30, 30, 34, 0.95);
+  --l3-shadow: 0 28px 72px rgba(0, 0, 0, 0.74);
+
+  --ink-primary: #f5f5f7;
+  --ink-secondary: #a1a1a6;
+  --ink-tertiary: #6e6e73;
+  --fill-control: rgba(118, 118, 128, 0.24);
+  --fill-control-hover: rgba(118, 118, 128, 0.34);
+  --divider: rgba(255, 255, 255, 0.11);
+}
+
+/* 5 Reader Paper & Ink Presets */
+[data-reader-theme="white"] {
+  --r-bg: #ffffff;
+  --r-ink: #1d1d1f;
+  --r-ink-muted: #7a7a80;
+  --r-glass: rgba(255, 255, 255, 0.8);
+  --r-glass-border: rgba(0, 0, 0, 0.085);
+  --r-glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.88);
+  --r-panel-bg: rgba(252, 252, 254, 0.93);
+  --r-control: rgba(118, 118, 128, 0.11);
+  --r-control-hover: rgba(118, 118, 128, 0.18);
+  --r-divider: rgba(0, 0, 0, 0.08);
+  --r-progress: #0071e3;
+}
+
+[data-reader-theme="sepia"] {
+  --r-bg: #f7f1e3;
+  --r-ink: #382c20;
+  --r-ink-muted: #84725e;
+  --r-glass: rgba(247, 241, 227, 0.82);
+  --r-glass-border: rgba(92, 70, 44, 0.12);
+  --r-glass-highlight: inset 0 1px 0 rgba(255, 252, 245, 0.72);
+  --r-panel-bg: rgba(250, 245, 234, 0.94);
+  --r-control: rgba(92, 70, 44, 0.09);
+  --r-control-hover: rgba(92, 70, 44, 0.15);
+  --r-divider: rgba(92, 70, 44, 0.11);
+  --r-progress: #9a6b39;
+}
+
+[data-reader-theme="gray"] {
+  --r-bg: #edeff2;
+  --r-ink: #22252a;
+  --r-ink-muted: #686e78;
+  --r-glass: rgba(237, 239, 242, 0.82);
+  --r-glass-border: rgba(0, 0, 0, 0.085);
+  --r-glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  --r-panel-bg: rgba(243, 245, 248, 0.94);
+  --r-control: rgba(60, 68, 80, 0.1);
+  --r-control-hover: rgba(60, 68, 80, 0.16);
+  --r-divider: rgba(0, 0, 0, 0.08);
+  --r-progress: #0071e3;
+}
+
+[data-reader-theme="dark"] {
+  --r-bg: #1c1c1e;
+  --r-ink: #d8d8dc;
+  --r-ink-muted: #82828a;
+  --r-glass: rgba(34, 34, 38, 0.82);
+  --r-glass-border: rgba(255, 255, 255, 0.11);
+  --r-glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.085);
+  --r-panel-bg: rgba(32, 32, 36, 0.94);
+  --r-control: rgba(255, 255, 255, 0.11);
+  --r-control-hover: rgba(255, 255, 255, 0.17);
+  --r-divider: rgba(255, 255, 255, 0.1);
+  --r-progress: #0a84ff;
+}
+
+[data-reader-theme="oled"] {
+  --r-bg: #000000;
+  --r-ink: #babac0;
+  --r-ink-muted: #6a6a72;
+  --r-glass: rgba(20, 20, 22, 0.85);
+  --r-glass-border: rgba(255, 255, 255, 0.12);
+  --r-glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.075);
+  --r-panel-bg: rgba(18, 18, 20, 0.96);
+  --r-control: rgba(255, 255, 255, 0.12);
+  --r-control-hover: rgba(255, 255, 255, 0.18);
+  --r-divider: rgba(255, 255, 255, 0.11);
+  --r-progress: #0a84ff;
+}

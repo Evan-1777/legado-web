@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Legado" />
+    <meta name="theme-color" content="#f5f5f7" id="meta-theme-color" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <title>Legado</title>
+    <script>
+      (function () {
+        try {
+          var raw = localStorage.getItem('legado_web_settings_v1');
+          var parsed = raw ? JSON.parse(raw) : null;
+          var uiTheme = parsed && parsed.uiTheme ? parsed.uiTheme : 'system';
+          var preferDark =
+            uiTheme === 'dark' ||
+            (uiTheme === 'system' &&
+              window.matchMedia &&
+              window.matchMedia('(prefers-color-scheme: dark)').matches);
+          var resolved = preferDark ? 'dark' : 'light';
+          document.documentElement.setAttribute('data-ui-theme', resolved);
+          var meta = document.getElementById('meta-theme-color');
+          if (meta) meta.setAttribute('content', preferDark ? '#000000' : '#f5f5f7');
+        } catch (_) {}
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
