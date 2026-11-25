@@ -135,6 +135,10 @@
   text-indent: var(--r-indent);
 }
 
+.chapter-body p:last-child {
+  margin-bottom: 0;
+}
+
 .chapter-body p.has-img,
 .chapter-body p:has(img) {
   text-indent: 0;
@@ -152,6 +156,11 @@
   border: 1px solid var(--r-divider);
   cursor: zoom-in;
   break-inside: avoid;
+}
+
+/* Keep tall illustrations inside a paginated column instead of clipping. */
+.paginated-track .chapter-body img {
+  max-height: calc(var(--r-page-height, 70vh) - 24px);
 }
 
 .chapter-body blockquote {

@@ -9,45 +9,59 @@ export interface ProgressSnapshot {
   durChapterTitle: string;
 }
 
+function buildPayload(
+  book: Book | undefined,
+  snap: ProgressSnapshot
+): BookProgressPayload | null {
+  if (!book) return null;
+  return {
+    url: book.bookUrl,
+    name: book.name,
+    author: book.author || '',
+    durChapterIndex: snap.durChapterIndex,
+    durChapterPos: Math.max(0, Math.round(snap.durChapterPos)),
+    durChapterTime: Date.now(),
+    durChapterTitle: snap.durChapterTitle,
+  };
+}
+
+function signatureOf(payload: BookProgressPayload): string {
+  return `${payload.url}::${payload.durChapterIndex}::${payload.durChapterPos}`;
+}
+
 export function useProgressSync(endpoint: EndpointConfig, book: Book | undefined) {
   const latestRef = useRef<ProgressSnapshot | null>(null);
   const lastSavedKeyRef = useRef<string>('');
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const bookRef = useRef(book);
   const endpointRef = useRef(endpoint);
+  const lastBookUrlRef = useRef<string>(book?.bookUrl ?? '');
 
   bookRef.current = book;
   endpointRef.current = endpoint;
 
   const patchBookProgress = useBookshelfStore((s) => s.patchBookProgress);
 
-  const buildPayload = (snap: ProgressSnapshot): BookProgressPayload | null => {
-    const b = bookRef.current;
-    if (!b) return null;
-    return {
-      url: b.bookUrl,
-      name: b.name,
-      author: b.author || '',
-      durChapterIndex: snap.durChapterIndex,
-      durChapterPos: Math.max(0, Math.round(snap.durChapterPos)),
-      durChapterTime: Date.now(),
-      durChapterTitle: snap.durChapterTitle,
-    };
-  };
+  /** Record the server-provided baseline without issuing a write request. */
+  const seedSavedProgress = useCallback((snap: ProgressSnapshot) => {
+    const payload = buildPayload(bookRef.current, snap);
+    if (!payload) return;
+    lastSavedKeyRef.current = signatureOf(payload);
+  }, []);
 
   const flush = useCallback(
-    (keepalive = false) => {
+    (keepalive = false): Promise<void> => {
       if (timerRef.current) {
         clearTimeout(timerRef.current);
         timerRef.current = null;
       }
       const snap = latestRef.current;
-      if (!snap) return;
-      const payload = buildPayload(snap);
-      if (!payload) return;
+      if (!snap) return Promise.resolve();
+      const payload = buildPayload(bookRef.current, snap);
+      if (!payload) return Promise.resolve();
 
-      const sig = `${payload.url}::${payload.durChapterIndex}::${payload.durChapterPos}`;
-      if (sig === lastSavedKeyRef.current) return;
+      const sig = signatureOf(payload);
+      if (sig === lastSavedKeyRef.current) return Promise.resolve();
       lastSavedKeyRef.current = sig;
 
       patchBookProgress(payload.url, {
@@ -57,10 +71,12 @@ export function useProgressSync(endpoint: EndpointConfig, book: Book | undefined
         durChapterTitle: payload.durChapterTitle,
       });
 
-      void saveBookProgress(endpointRef.current, payload, keepalive).catch(() => {
-        // Allow retry on next update if regular save failed
-        if (!keepalive) lastSavedKeyRef.current = '';
-      });
+      return saveBookProgress(endpointRef.current, payload, keepalive)
+        .catch(() => {
+          // Allow retry on next update if a regular save failed.
+          if (!keepalive) lastSavedKeyRef.current = '';
+        })
+        .then(() => undefined);
     },
     [patchBookProgress]
   );
@@ -79,34 +95,47 @@ export function useProgressSync(endpoint: EndpointConfig, book: Book | undefined
       }
 
       if (immediate) {
-        flush(false);
+        void flush(false);
         return;
       }
       if (timerRef.current) clearTimeout(timerRef.current);
       timerRef.current = setTimeout(() => {
-        flush(false);
+        void flush(false);
       }, 2500);
     },
     [flush, patchBookProgress]
   );
 
+  // A different book must never inherit the previous book's pending snapshot.
+  const bookUrl = book?.bookUrl ?? '';
+  useEffect(() => {
+    if (lastBookUrlRef.current === bookUrl) return;
+    lastBookUrlRef.current = bookUrl;
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    latestRef.current = null;
+    lastSavedKeyRef.current = '';
+  }, [bookUrl]);
+
   useEffect(() => {
     const onVisibilityChange = () => {
       if (document.visibilityState === 'hidden') {
-        flush(true);
+        void flush(true);
       }
     };
     const onPageHide = () => {
-      flush(true);
+      void flush(true);
     };
     document.addEventListener('visibilitychange', onVisibilityChange);
     window.addEventListener('pagehide', onPageHide);
     return () => {
       document.removeEventListener('visibilitychange', onVisibilityChange);
       window.removeEventListener('pagehide', onPageHide);
-      flush(true);
+      void flush(true);
     };
   }, [flush]);
 
-  return { scheduleSave, flush };
+  return { scheduleSave, flush, seedSavedProgress };
 }

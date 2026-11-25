@@ -10,6 +10,8 @@ export interface UseReaderInputOptions {
   onHideHud: () => void;
   onPrevPage: () => void;
   onNextPage: () => void;
+  onFirstPage?: () => void;
+  onLastPage?: () => void;
   onPrevChapter: () => void;
   onNextChapter: () => void;
   onToggleToc: () => void;
@@ -26,12 +28,13 @@ function isEditableElement(target: EventTarget | null): boolean {
   return false;
 }
 
+const WHEEL_STEP_PX = 24;
+const WHEEL_COOLDOWN_MS = 260;
+const WHEEL_IDLE_RESET_MS = 140;
+
 export function useReaderInput(options: UseReaderInputOptions) {
   const optsRef = useRef(options);
   optsRef.current = options;
-
-  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
-  const swipedRef = useRef(false);
 
   // Desktop keyboard shortcuts
   useEffect(() => {
@@ -80,18 +83,32 @@ export function useReaderInput(options: UseReaderInputOptions) {
       }
 
       if (opts.readingMode === 'paginated') {
-        if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
+        if (
+          e.key === 'ArrowLeft' ||
+          e.key === 'ArrowUp' ||
+          e.key === 'PageUp' ||
+          (e.key === ' ' && e.shiftKey)
+        ) {
           e.preventDefault();
           opts.onHideHud();
           opts.onPrevPage();
         } else if (
           e.key === 'ArrowRight' ||
+          e.key === 'ArrowDown' ||
           e.key === 'PageDown' ||
-          e.key === ' '
+          (e.key === ' ' && !e.shiftKey)
         ) {
           e.preventDefault();
           opts.onHideHud();
           opts.onNextPage();
+        } else if (e.key === 'Home') {
+          e.preventDefault();
+          opts.onHideHud();
+          opts.onFirstPage?.();
+        } else if (e.key === 'End') {
+          e.preventDefault();
+          opts.onHideHud();
+          opts.onLastPage?.();
         }
       }
     };
@@ -100,11 +117,57 @@ export function useReaderInput(options: UseReaderInputOptions) {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
+  // Wheel / trackpad paging with axis merging and inertia cooldown. A single
+  // physical swipe must never skip multiple pages.
+  useEffect(() => {
+    let accum = 0;
+    let lastEventAt = 0;
+    let lastFlipAt = 0;
+    let lastDirection = 0;
+
+    const onWheel = (event: WheelEvent) => {
+      const opts = optsRef.current;
+      if (opts.readingMode !== 'paginated' || opts.overlayOpen) return;
+      if (event.ctrlKey) return;
+
+      const dx = event.deltaX;
+      const dy = event.deltaY;
+      const axis = Math.abs(dx) >= Math.abs(dy) ? dx : dy;
+      if (axis === 0) return;
+
+      const now = performance.now();
+      if (now - lastEventAt > WHEEL_IDLE_RESET_MS) accum = 0;
+      lastEventAt = now;
+
+      const direction = axis > 0 ? 1 : -1;
+
+      // Same-direction inertia inside the cooldown is discarded, not queued.
+      if (now - lastFlipAt < WHEEL_COOLDOWN_MS && direction === lastDirection) {
+        accum = 0;
+        event.preventDefault();
+        return;
+      }
+
+      event.preventDefault();
+      if (direction !== Math.sign(accum)) accum = 0;
+      accum += axis;
+
+      if (Math.abs(accum) < WHEEL_STEP_PX) return;
+      if (now - lastFlipAt < WHEEL_COOLDOWN_MS) return;
+
+      if (accum > 0) opts.onNextPage();
+      else opts.onPrevPage();
+      opts.onHideHud();
+      lastFlipAt = now;
+      lastDirection = direction;
+      accum = 0;
+    };
+
+    window.addEventListener('wheel', onWheel, { passive: false });
+    return () => window.removeEventListener('wheel', onWheel);
+  }, []);
+
   const handleStageClick = (e: React.MouseEvent<HTMLElement>) => {
-    if (swipedRef.current) {
-      swipedRef.current = false;
-      return;
-    }
     const sel = window.getSelection();
     if (sel && sel.toString().trim().length > 0) return;
 
@@ -145,40 +208,5 @@ export function useReaderInput(options: UseReaderInputOptions) {
     }
   };
 
-  const handleTouchStart = (e: React.TouchEvent<HTMLElement>) => {
-    if (e.touches.length !== 1) return;
-    swipedRef.current = false;
-    touchStartRef.current = {
-      x: e.touches[0].clientX,
-      y: e.touches[0].clientY,
-    };
-  };
-
-  const handleTouchEnd = (e: React.TouchEvent<HTMLElement>) => {
-    const start = touchStartRef.current;
-    touchStartRef.current = null;
-    if (!start || e.changedTouches.length === 0) return;
-
-    const opts = optsRef.current;
-    if (opts.readingMode !== 'paginated' || opts.overlayOpen) return;
-
-    const dx = e.changedTouches[0].clientX - start.x;
-    const dy = e.changedTouches[0].clientY - start.y;
-
-    if (Math.abs(dx) >= 48 && Math.abs(dx) > Math.abs(dy) * 1.2) {
-      swipedRef.current = true;
-      opts.onHideHud();
-      if (dx < 0) {
-        opts.onNextPage();
-      } else {
-        opts.onPrevPage();
-      }
-    }
-  };
-
-  return {
-    handleStageClick,
-    handleTouchStart,
-    handleTouchEnd,
-  };
+  return { handleStageClick };
 }

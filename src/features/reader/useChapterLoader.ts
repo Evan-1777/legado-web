@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { getBookContent } from '@/api/client';
 import type { BookChapter, EndpointConfig, NormalizedChapter } from '@/api/types';
 import { normalizeChapter } from '@/engine/chapterNormalizer';
@@ -33,6 +33,12 @@ export interface UseChapterLoaderParams {
   enabled: boolean;
 }
 
+interface LoadedChapter {
+  index: number;
+  key: string;
+  data: NormalizedChapter;
+}
+
 export function useChapterLoader({
   endpoint,
   bookUrl,
@@ -40,12 +46,12 @@ export function useChapterLoader({
   chapterIndex,
   enabled,
 }: UseChapterLoaderParams) {
-  const [chapter, setChapter] = useState<NormalizedChapter | null>(null);
+  // The chapter and its index travel together so a chapter key can never be
+  // paired with another chapter's body.
+  const [state, setState] = useState<LoadedChapter | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reloadNonce, setReloadNonce] = useState(0);
-
-  const prefetchControllerRef = useRef<AbortController | null>(null);
 
   const buildKey = useCallback(
     (idx: number) => `${endpoint.id}::${bookUrl}::${idx}`,
@@ -58,31 +64,67 @@ export function useChapterLoader({
     return Math.min(2048, Math.round(Math.min(window.innerWidth, 960) * dpr));
   };
 
+  const syncKey =
+    enabled && bookUrl && chapterIndex >= 0 ? buildKey(chapterIndex) : '';
+  const syncCached =
+    syncKey && reloadNonce === 0 ? chapterCache.get(syncKey) : undefined;
+
+  let chapter: NormalizedChapter | null = null;
+  let loadedIndex: number | null = null;
+  if (syncCached) {
+    // Cache hits resolve in the same render: zero stale-body frame on switch.
+    chapter = syncCached;
+    loadedIndex = chapterIndex;
+  } else if (state && syncKey && state.key === syncKey) {
+    chapter = state.data;
+    loadedIndex = state.index;
+  }
+
   useEffect(() => {
     if (!enabled || !bookUrl || chapterIndex < 0) return;
 
-    const currentMeta = chapters[chapterIndex];
-    const title = currentMeta?.title || `第 ${chapterIndex + 1} 章`;
     const key = buildKey(chapterIndex);
+    const cached = reloadNonce === 0 ? chapterCache.get(key) : undefined;
+    const controller = new AbortController();
+    const prefetchers: AbortController[] = [];
+    let disposed = false;
 
-    const cached = chapterCache.get(key);
-    if (cached && reloadNonce === 0) {
+    if (cached) {
       touchLru(key, cached);
-      setChapter(cached);
+      setState({ index: chapterIndex, key, data: cached });
       setLoading(false);
+      setError(null);
+    } else {
+      setLoading(true);
       setError(null);
     }
 
-    const controller = new AbortController();
+    const prefetchNeighbor = (idx: number) => {
+      if (disposed || idx < 0 || idx >= chapters.length) return;
+      const nKey = buildKey(idx);
+      if (chapterCache.has(nKey)) return;
+      const preCtrl = new AbortController();
+      prefetchers.push(preCtrl);
+      const title = chapters[idx]?.title || `第 ${idx + 1} 章`;
+      void getBookContent(endpoint, bookUrl, idx, preCtrl.signal)
+        .then((raw) => {
+          if (preCtrl.signal.aborted) return;
+          const normalized = normalizeChapter(raw, {
+            bookUrl,
+            endpoint,
+            chapterTitle: title,
+            targetImgWidth: computeTargetImgWidth(),
+          });
+          touchLru(nKey, normalized);
+        })
+        .catch(() => {
+          // Silent prefetch failure never disturbs reading.
+        });
+    };
 
-    const loadCurrent = async () => {
-      if (!cached || reloadNonce > 0) {
-        setLoading(true);
-        setError(null);
-      }
-      try {
-        let resolved = cached;
-        if (!resolved || reloadNonce > 0) {
+    const run = async () => {
+      if (!cached) {
+        try {
           const raw = await getBookContent(
             endpoint,
             bookUrl,
@@ -90,66 +132,49 @@ export function useChapterLoader({
             controller.signal
           );
           if (controller.signal.aborted) return;
-          resolved = normalizeChapter(raw, {
+          const title =
+            chapters[chapterIndex]?.title || `第 ${chapterIndex + 1} 章`;
+          const normalized = normalizeChapter(raw, {
             bookUrl,
             endpoint,
             chapterTitle: title,
             targetImgWidth: computeTargetImgWidth(),
           });
-          touchLru(key, resolved);
-          setChapter(resolved);
+          touchLru(key, normalized);
+          setState({ index: chapterIndex, key, data: normalized });
           setLoading(false);
           setError(null);
+        } catch (err) {
+          if (controller.signal.aborted) return;
+          setLoading(false);
+          setError(err instanceof Error ? err.message : '加载章节正文失败');
+          return;
         }
-
-        // Silent prefetch for index + 1
-        const nextIndex = chapterIndex + 1;
-        if (nextIndex < chapters.length) {
-          const nextKey = buildKey(nextIndex);
-          if (!chapterCache.has(nextKey)) {
-            prefetchControllerRef.current?.abort();
-            const preCtrl = new AbortController();
-            prefetchControllerRef.current = preCtrl;
-            const nextTitle = chapters[nextIndex]?.title || `第 ${nextIndex + 1} 章`;
-            void getBookContent(endpoint, bookUrl, nextIndex, preCtrl.signal)
-              .then((rawNext) => {
-                if (preCtrl.signal.aborted) return;
-                const normNext = normalizeChapter(rawNext, {
-                  bookUrl,
-                  endpoint,
-                  chapterTitle: nextTitle,
-                  targetImgWidth: computeTargetImgWidth(),
-                });
-                touchLru(nextKey, normNext);
-              })
-              .catch(() => {
-                // Silent prefetch failure does not disturb reading
-              });
-          }
-        }
-      } catch (err) {
-        if (controller.signal.aborted) return;
-        setLoading(false);
-        setError(err instanceof Error ? err.message : '加载章节正文失败');
       }
+      prefetchNeighbor(chapterIndex + 1);
+      prefetchNeighbor(chapterIndex - 1);
     };
 
-    void loadCurrent();
+    void run();
 
     return () => {
+      disposed = true;
       controller.abort();
+      for (const preCtrl of prefetchers) preCtrl.abort();
     };
-  }, [endpoint, bookUrl, chapters, chapterIndex, enabled, buildKey, reloadNonce]);
-
-  useEffect(() => {
-    return () => {
-      prefetchControllerRef.current?.abort();
-    };
-  }, []);
+  }, [
+    endpoint,
+    bookUrl,
+    chapters,
+    chapterIndex,
+    enabled,
+    buildKey,
+    reloadNonce,
+  ]);
 
   const retry = useCallback(() => {
     setReloadNonce((n) => n + 1);
   }, []);
 
-  return { chapter, loading, error, retry };
+  return { chapter, loadedIndex, loading, error, retry };
 }

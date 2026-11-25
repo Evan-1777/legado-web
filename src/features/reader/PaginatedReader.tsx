@@ -9,6 +9,19 @@ import {
 } from 'react';
 import type { NormalizedChapter } from '@/api/types';
 import { ChapterView } from './ChapterView';
+import {
+  computePaginatedLayout,
+  computeTotalPages,
+  measureContentRightEdge,
+  resolveCharPosPage,
+  resolvePageCharPos,
+} from './paginationEngine';
+
+export type PaginatedStateReason =
+  | 'init'
+  | 'navigate'
+  | 'reflow'
+  | 'chapter-end';
 
 export interface PaginatedPageInfo {
   page: number;
@@ -32,17 +45,21 @@ export interface PaginatedReaderProps {
   startFromEnd?: boolean;
   paddingX: number;
   paddingY: number;
+  maxWidth: number;
   columnGap: number;
   twoColumnOnWide: boolean;
   pageAnimation: 'slide' | 'none';
   layoutToken: string;
+  interactionEnabled?: boolean;
   onReachPrevChapter: () => void;
   onReachNextChapter: () => void;
   onPageStateChange: (
     charPos: number,
     chapterPercent: number,
-    info: PaginatedPageInfo
+    info: PaginatedPageInfo,
+    reason: PaginatedStateReason
   ) => void;
+  onInteractionStart?: () => void;
   onImageClick?: (src: string, alt: string) => void;
 }
 
@@ -55,13 +72,16 @@ export const PaginatedReader = forwardRef<PaginatedReaderHandle, PaginatedReader
       startFromEnd = false,
       paddingX,
       paddingY,
+      maxWidth,
       columnGap,
       twoColumnOnWide,
       pageAnimation,
       layoutToken,
+      interactionEnabled = true,
       onReachPrevChapter,
       onReachNextChapter,
       onPageStateChange,
+      onInteractionStart,
       onImageClick,
     },
     ref
@@ -72,66 +92,36 @@ export const PaginatedReader = forwardRef<PaginatedReaderHandle, PaginatedReader
     const [page, setPage] = useState(0);
     const [stepPx, setStepPx] = useState(0);
     const [colWidthPx, setColWidthPx] = useState(0);
+    const [columns, setColumns] = useState<1 | 2>(1);
     const [suppressAnim, setSuppressAnim] = useState(true);
 
+    // Single source of truth for reading position. Only explicit navigation
+    // writes this ref; reflow is strictly read-only to prevent drift.
     const anchorCharPosRef = useRef(initialCharPos);
     const pageRef = useRef(0);
     const totalPagesRef = useRef(1);
     const stepPxRef = useRef(0);
     const columnsRef = useRef<1 | 2>(1);
     const lastChapterKeyRef = useRef('');
-
-    const computeCharPosForPage = useCallback(
-      (targetPage: number, step: number): number => {
-        const track = trackRef.current;
-        if (!track || step <= 0) return 0;
-        const trackLeft = track.getBoundingClientRect().left;
-        const pageLeftInTrack = targetPage * step;
-        const nodes = track.querySelectorAll<HTMLElement>('[data-start]');
-        for (const node of nodes) {
-          const rect = node.getBoundingClientRect();
-          // Undo current translateX offset to recover untransformed track X
-          const nodeLeft = rect.left - trackLeft;
-          const nodeRight = rect.right - trackLeft;
-          if (nodeRight >= pageLeftInTrack + 4 && nodeLeft < pageLeftInTrack + step) {
-            const start = Number(node.dataset.start);
-            return Number.isFinite(start) ? start : 0;
-          }
-        }
-        return 0;
-      },
-      []
-    );
-
-    const findPageForCharPos = useCallback((charPos: number, step: number, maxPages: number): number => {
-      const track = trackRef.current;
-      if (!track || step <= 0 || charPos <= 0) return 0;
-      const trackLeft = track.getBoundingClientRect().left;
-      const nodes = track.querySelectorAll<HTMLElement>('[data-start]');
-      for (const node of nodes) {
-        const start = Number(node.dataset.start);
-        const end = Number(node.dataset.end);
-        if ((charPos >= start && charPos <= end) || start >= charPos) {
-          const nodeLeft = node.getBoundingClientRect().left - trackLeft;
-          const idx = Math.floor(Math.max(0, nodeLeft + 2) / step);
-          return Math.min(Math.max(0, maxPages - 1), idx);
-        }
-      }
-      return 0;
-    }, []);
+    const dragSuppressUntilRef = useRef(0);
 
     const emitState = useCallback(
-      (nextPage: number, nextTotal: number, nextCols: 1 | 2, nextStep: number) => {
-        const charPos = computeCharPosForPage(nextPage, nextStep);
-        anchorCharPosRef.current = charPos;
+      (
+        charPos: number,
+        nextPage: number,
+        nextTotal: number,
+        nextCols: 1 | 2,
+        reason: PaginatedStateReason
+      ) => {
         const pct = nextTotal <= 1 ? 1 : nextPage / (nextTotal - 1);
-        onPageStateChange(charPos, pct, {
-          page: nextPage,
-          totalPages: nextTotal,
-          columns: nextCols,
-        });
+        onPageStateChange(
+          charPos,
+          pct,
+          { page: nextPage, totalPages: nextTotal, columns: nextCols },
+          reason
+        );
       },
-      [computeCharPosForPage, onPageStateChange]
+      [onPageStateChange]
     );
 
     const measureAndAnchor = useCallback(
@@ -144,56 +134,103 @@ export const PaginatedReader = forwardRef<PaginatedReaderHandle, PaginatedReader
         const vh = viewport.clientHeight;
         if (vw <= 0 || vh <= 0) return;
 
-        const innerW = Math.max(200, vw - paddingX * 2);
-        const isLandscape = vw > vh;
-        const nextCols: 1 | 2 =
-          twoColumnOnWide && vw >= 1024 && isLandscape ? 2 : 1;
-        const nextColW =
-          nextCols === 2 ? Math.floor((innerW - columnGap) / 2) : innerW;
-        const nextStep = innerW + columnGap;
+        const layout = computePaginatedLayout({
+          viewportWidth: vw,
+          viewportHeight: vh,
+          paddingX,
+          maxWidth,
+          columnGap,
+          twoColumnOnWide,
+        });
 
-        // Apply layout geometry directly so scrollWidth reflects final column count synchronously
-        track.style.columnWidth = `${nextColW}px`;
+        // Apply geometry synchronously so scrollWidth measures the final columns.
+        viewport.style.padding = `${paddingY}px ${layout.effectivePaddingX}px`;
+        viewport.style.setProperty(
+          '--r-page-height',
+          `${Math.max(0, vh - paddingY * 2)}px`
+        );
+        track.style.columnWidth = `${layout.columnWidth}px`;
         track.style.columnGap = `${columnGap}px`;
 
-        const scrollW = track.scrollWidth;
-        const nextTotal = Math.max(
-          1,
-          Math.ceil((scrollW + columnGap - 2) / nextStep)
+        const contentRight = measureContentRightEdge(track);
+        const nextTotal = computeTotalPages(
+          contentRight,
+          track.scrollWidth,
+          columnGap,
+          layout.stepPx
         );
 
         let nextPage = 0;
+        let charPos = anchorCharPosRef.current;
+
         if (anchorMode === 'end') {
           nextPage = Math.max(0, nextTotal - 1);
+          charPos = resolvePageCharPos(
+            track,
+            nextPage,
+            layout.stepPx,
+            chapter.characterCount
+          );
+          anchorCharPosRef.current = charPos;
+        } else if (anchorMode === 'initial') {
+          anchorCharPosRef.current = initialCharPos;
+          charPos = initialCharPos;
+          nextPage = resolveCharPosPage(
+            track,
+            initialCharPos,
+            layout.stepPx,
+            nextTotal
+          );
         } else {
-          const targetChar =
-            anchorMode === 'initial' ? initialCharPos : anchorCharPosRef.current;
-          nextPage = findPageForCharPos(targetChar, nextStep, nextTotal);
+          // Preserve: resolve the page from the untouched anchor.
+          nextPage = resolveCharPosPage(
+            track,
+            charPos,
+            layout.stepPx,
+            nextTotal
+          );
         }
 
-        columnsRef.current = nextCols;
-        stepPxRef.current = nextStep;
+        columnsRef.current = layout.columns;
+        stepPxRef.current = layout.stepPx;
         totalPagesRef.current = nextTotal;
         pageRef.current = nextPage;
 
         setSuppressAnim(true);
-        setColWidthPx(nextColW);
-        setStepPx(nextStep);
+        setColumns(layout.columns);
+        setColWidthPx(layout.columnWidth);
+        setStepPx(layout.stepPx);
         setPage(nextPage);
 
-        emitState(nextPage, nextTotal, nextCols, nextStep);
+        // Avoid a single-frame offset flash while the browser reflows.
+        track.style.transition = 'none';
+        track.style.transform = `translate3d(${-nextPage * layout.stepPx}px, 0, 0)`;
+
+        emitState(
+          charPos,
+          nextPage,
+          nextTotal,
+          layout.columns,
+          anchorMode === 'initial'
+            ? 'init'
+            : anchorMode === 'end'
+              ? 'chapter-end'
+              : 'reflow'
+        );
       },
       [
+        chapter.characterCount,
         columnGap,
         emitState,
-        findPageForCharPos,
         initialCharPos,
+        maxWidth,
         paddingX,
+        paddingY,
         twoColumnOnWide,
       ]
     );
 
-    // Chapter switch or typography/margin/font change
+    // Chapter switch, retry content, or typography/margin/font change.
     useLayoutEffect(() => {
       const isNewChapter = lastChapterKeyRef.current !== chapterKey;
       lastChapterKeyRef.current = chapterKey;
@@ -203,16 +240,38 @@ export const PaginatedReader = forwardRef<PaginatedReaderHandle, PaginatedReader
       } else {
         measureAndAnchor('preserve');
       }
-    }, [chapterKey, initialCharPos, startFromEnd, layoutToken, measureAndAnchor]);
+    }, [
+      chapterKey,
+      chapter,
+      initialCharPos,
+      startFromEnd,
+      layoutToken,
+      measureAndAnchor,
+    ]);
 
-    // ResizeObserver & FontFace readiness re-measure preserving anchor
+    // Viewport resize and font readiness re-measure while preserving anchor.
     useEffect(() => {
       const viewport = viewportRef.current;
       if (!viewport) return;
 
-      const ro = new ResizeObserver(() => {
-        measureAndAnchor('preserve');
-      });
+      let raf = 0;
+      let lastW = viewport.clientWidth;
+      let lastH = viewport.clientHeight;
+
+      const schedule = () => {
+        const w = viewport.clientWidth;
+        const h = viewport.clientHeight;
+        if (w === lastW && h === lastH) return;
+        lastW = w;
+        lastH = h;
+        if (raf) cancelAnimationFrame(raf);
+        raf = requestAnimationFrame(() => {
+          raf = 0;
+          measureAndAnchor('preserve');
+        });
+      };
+
+      const ro = new ResizeObserver(schedule);
       ro.observe(viewport);
 
       let cancelled = false;
@@ -225,44 +284,89 @@ export const PaginatedReader = forwardRef<PaginatedReaderHandle, PaginatedReader
       return () => {
         cancelled = true;
         ro.disconnect();
+        if (raf) cancelAnimationFrame(raf);
       };
+    }, [measureAndAnchor]);
+
+    // Async decoded images change line boxes after layout: re-measure in place.
+    useEffect(() => {
+      const track = trackRef.current;
+      if (!track) return;
+      const onLoad = (event: Event) => {
+        const target = event.target as HTMLElement | null;
+        if (target?.tagName === 'IMG') measureAndAnchor('preserve');
+      };
+      track.addEventListener('load', onLoad, true);
+      return () => track.removeEventListener('load', onLoad, true);
     }, [measureAndAnchor]);
 
     const goToPageInternal = useCallback(
       (targetIndex: number, animate = true) => {
-        const clamped = Math.max(0, Math.min(totalPagesRef.current - 1, targetIndex));
+        const track = trackRef.current;
+        const step = stepPxRef.current;
+        const total = totalPagesRef.current;
+        const clamped = Math.max(0, Math.min(total - 1, targetIndex));
+        const charPos =
+          clamped === 0
+            ? 0
+            : resolvePageCharPos(
+                track,
+                clamped,
+                step,
+                anchorCharPosRef.current
+              );
+
+        anchorCharPosRef.current = charPos;
         pageRef.current = clamped;
+
         setSuppressAnim(!animate);
         setPage(clamped);
-        emitState(clamped, totalPagesRef.current, columnsRef.current, stepPxRef.current);
+        emitState(charPos, clamped, total, columnsRef.current, 'navigate');
       },
       [emitState]
     );
 
+    const goToCharPosInternal = useCallback(
+      (pos: number) => {
+        const track = trackRef.current;
+        const step = stepPxRef.current;
+        const total = totalPagesRef.current;
+        const target = Math.max(0, pos);
+        const idx = resolveCharPosPage(track, target, step, total);
+        anchorCharPosRef.current = target;
+        pageRef.current = idx;
+        setSuppressAnim(true);
+        setPage(idx);
+        emitState(target, idx, total, columnsRef.current, 'navigate');
+      },
+      [emitState]
+    );
+
+    const flipPrev = useCallback(() => {
+      if (pageRef.current > 0) {
+        goToPageInternal(pageRef.current - 1, pageAnimation === 'slide');
+        return true;
+      }
+      onReachPrevChapter();
+      return false;
+    }, [goToPageInternal, onReachPrevChapter, pageAnimation]);
+
+    const flipNext = useCallback(() => {
+      if (pageRef.current < totalPagesRef.current - 1) {
+        goToPageInternal(pageRef.current + 1, pageAnimation === 'slide');
+        return true;
+      }
+      onReachNextChapter();
+      return false;
+    }, [goToPageInternal, onReachNextChapter, pageAnimation]);
+
     useImperativeHandle(
       ref,
       () => ({
-        prevPage: () => {
-          if (pageRef.current > 0) {
-            goToPageInternal(pageRef.current - 1, pageAnimation === 'slide');
-            return true;
-          }
-          onReachPrevChapter();
-          return false;
-        },
-        nextPage: () => {
-          if (pageRef.current < totalPagesRef.current - 1) {
-            goToPageInternal(pageRef.current + 1, pageAnimation === 'slide');
-            return true;
-          }
-          onReachNextChapter();
-          return false;
-        },
+        prevPage: flipPrev,
+        nextPage: flipNext,
         goToPage: (idx) => goToPageInternal(idx, pageAnimation === 'slide'),
-        goToCharPos: (pos) => {
-          const idx = findPageForCharPos(pos, stepPxRef.current, totalPagesRef.current);
-          goToPageInternal(idx, false);
-        },
+        goToCharPos: goToCharPosInternal,
         getCurrentCharPos: () => anchorCharPosRef.current,
         getPageInfo: () => ({
           page: pageRef.current,
@@ -271,13 +375,138 @@ export const PaginatedReader = forwardRef<PaginatedReaderHandle, PaginatedReader
         }),
       }),
       [
-        findPageForCharPos,
+        flipNext,
+        flipPrev,
+        goToCharPosInternal,
         goToPageInternal,
-        onReachNextChapter,
-        onReachPrevChapter,
         pageAnimation,
       ]
     );
+
+    // Finger-following horizontal drag with boundary damping (no React renders
+    // during the drag frame; the transform is written directly).
+    useEffect(() => {
+      const viewport = viewportRef.current;
+      if (!viewport || !interactionEnabled) return;
+
+      let dragging = false;
+      let locked = false;
+      let startX = 0;
+      let startY = 0;
+      let dx = 0;
+      let startTime = 0;
+
+      const applyDrag = (offset: number) => {
+        const track = trackRef.current;
+        if (!track) return;
+        const base = -pageRef.current * stepPxRef.current;
+        track.style.transition = 'none';
+        track.style.transform = `translate3d(${base + offset}px, 0, 0)`;
+      };
+
+      const settle = () => {
+        const track = trackRef.current;
+        if (!track) return;
+        const base = -pageRef.current * stepPxRef.current;
+        track.style.transition =
+          pageAnimation === 'slide'
+            ? 'transform 300ms var(--ease-apple)'
+            : 'none';
+        track.style.transform = `translate3d(${base}px, 0, 0)`;
+      };
+
+      const onTouchStart = (event: TouchEvent) => {
+        if (event.touches.length !== 1) return;
+        dragging = true;
+        locked = false;
+        dx = 0;
+        const touch = event.touches[0];
+        startX = touch.clientX;
+        startY = touch.clientY;
+        startTime = performance.now();
+      };
+
+      const onTouchMove = (event: TouchEvent) => {
+        if (!dragging) return;
+        if (event.touches.length !== 1) {
+          dragging = false;
+          return;
+        }
+        const touch = event.touches[0];
+        const rawDx = touch.clientX - startX;
+        const rawDy = touch.clientY - startY;
+
+        if (!locked) {
+          if (Math.abs(rawDx) < 8 && Math.abs(rawDy) < 8) return;
+          if (Math.abs(rawDx) > Math.abs(rawDy) * 1.15) {
+            locked = true;
+            onInteractionStart?.();
+          } else {
+            dragging = false;
+            return;
+          }
+        }
+
+        event.preventDefault();
+        const atFirst = pageRef.current <= 0;
+        const atLast = pageRef.current >= totalPagesRef.current - 1;
+        let offset = rawDx;
+        if (atFirst && rawDx > 0) offset = rawDx * 0.32;
+        else if (atLast && rawDx < 0) offset = rawDx * 0.32;
+        dx = offset;
+        applyDrag(offset);
+      };
+
+      const finish = () => {
+        if (!dragging) return;
+        dragging = false;
+        if (!locked) return;
+
+        const width = viewport.clientWidth || 1;
+        const elapsed = Math.max(1, performance.now() - startTime);
+        const velocity = Math.abs(dx) / elapsed;
+        const commit =
+          Math.abs(dx) >= width * 0.18 ||
+          (Math.abs(dx) >= 24 && velocity >= 0.35);
+
+        dragSuppressUntilRef.current = performance.now() + 250;
+        locked = false;
+
+        if (commit) {
+          if (dx < 0) flipNext();
+          else flipPrev();
+        } else {
+          settle();
+        }
+      };
+
+      const onCancel = () => {
+        if (dragging && locked) settle();
+        dragging = false;
+        locked = false;
+      };
+
+      const onClickCapture = (event: MouseEvent) => {
+        if (performance.now() < dragSuppressUntilRef.current) {
+          event.stopPropagation();
+          event.preventDefault();
+        }
+      };
+
+      viewport.addEventListener('touchstart', onTouchStart, { passive: true });
+      viewport.addEventListener('touchmove', onTouchMove, { passive: false });
+      viewport.addEventListener('touchend', finish);
+      viewport.addEventListener('touchcancel', onCancel);
+      viewport.addEventListener('click', onClickCapture, true);
+
+      return () => {
+        viewport.removeEventListener('touchstart', onTouchStart);
+        viewport.removeEventListener('touchmove', onTouchMove);
+        viewport.removeEventListener('touchend', finish);
+        viewport.removeEventListener('touchcancel', onCancel);
+        viewport.removeEventListener('click', onClickCapture, true);
+      };
+    }, [flipNext, flipPrev, interactionEnabled, onInteractionStart, pageAnimation]);
 
     const translateX = -page * stepPx;
     const animateNow = !suppressAnim && pageAnimation === 'slide';
@@ -288,11 +517,23 @@ export const PaginatedReader = forwardRef<PaginatedReaderHandle, PaginatedReader
         className="relative h-full w-full overflow-hidden"
         style={{
           padding: `${paddingY}px ${paddingX}px`,
+          touchAction: 'pan-y',
         }}
       >
+        {columns === 2 && (
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute left-1/2 w-px -translate-x-1/2 opacity-70"
+            style={{
+              top: paddingY,
+              bottom: paddingY,
+              background: 'var(--r-divider)',
+            }}
+          />
+        )}
         <div
           ref={trackRef}
-          className="h-full will-change-transform"
+          className="paginated-track h-full will-change-transform"
           style={{
             columnWidth: colWidthPx > 0 ? `${colWidthPx}px` : undefined,
             columnGap: `${columnGap}px`,

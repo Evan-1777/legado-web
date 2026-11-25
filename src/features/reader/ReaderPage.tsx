@@ -27,6 +27,7 @@ import {
   PaginatedReader,
   type PaginatedPageInfo,
   type PaginatedReaderHandle,
+  type PaginatedStateReason,
 } from './PaginatedReader';
 import { ReaderHud } from './ReaderHud';
 import { ReaderFooterBar, ReaderHeaderBar } from './ReaderStatusBar';
@@ -53,11 +54,17 @@ export function ReaderPage({
   onOpenFontLibrary,
 }: ReaderPageProps) {
   const endpoint = useConnectionStore((s) => s.getActiveEndpoint());
-  const { books, refresh: refreshBookshelf, patchBookProgress } = useBookshelfStore();
+  const {
+    books,
+    refresh: refreshBookshelf,
+    patchBookProgress,
+    hasLoaded: bookshelfHasLoaded,
+  } = useBookshelfStore();
   const book = useMemo(
     () => books.find((b) => b.bookUrl === bookUrl),
     [books, bookUrl]
   );
+  const bookReady = Boolean(book) || bookshelfHasLoaded;
 
   const settings = useSettingsStore((s) => s.settings);
   const { fonts: customFonts, ensureLoaded } = useFontStore();
@@ -67,14 +74,23 @@ export function ReaderPage({
   const [tocRefreshing, setTocRefreshing] = useState(false);
   const [tocError, setTocError] = useState<string | null>(null);
 
-  const [chapterIndex, setChapterIndex] = useState<number>(() =>
-    Math.max(0, book?.durChapterIndex ?? 0)
-  );
-  const [initialCharPos, setInitialCharPos] = useState<number>(() =>
-    Math.max(0, book?.durChapterPos ?? 0)
-  );
+  const [chapterIndex, setChapterIndex] = useState<number>(0);
+  const [initialCharPos, setInitialCharPos] = useState<number>(0);
   const [startFromEnd, setStartFromEnd] = useState(false);
-  const initializedBookRef = useRef<string>('');
+  const liveCharPosRef = useRef<number>(0);
+  const [hydratedBookUrl, setHydratedBookUrl] = useState<string>('');
+
+  // Hydrate during render so the first chapter cannot be requested before the
+  // saved reading position is known (direct /read links race /getBookshelf).
+  if (book && hydratedBookUrl !== book.bookUrl) {
+    const nextIndex = Math.max(0, book.durChapterIndex ?? 0);
+    const nextPos = Math.max(0, book.durChapterPos ?? 0);
+    setHydratedBookUrl(book.bookUrl);
+    setChapterIndex(nextIndex);
+    setInitialCharPos(nextPos);
+    setStartFromEnd(false);
+    liveCharPosRef.current = nextPos;
+  }
 
   const [hudVisible, setHudVisible] = useState(false);
   const [tocOpen, setTocOpen] = useState(false);
@@ -108,16 +124,6 @@ export function ReaderPage({
       void refreshBookshelf();
     }
   }, [books.length, refreshBookshelf]);
-
-  // Sync initial chapter & char pos once book metadata arrives
-  useEffect(() => {
-    if (!book) return;
-    if (initializedBookRef.current === book.bookUrl) return;
-    initializedBookRef.current = book.bookUrl;
-    setChapterIndex(Math.max(0, book.durChapterIndex ?? 0));
-    setInitialCharPos(Math.max(0, book.durChapterPos ?? 0));
-    setStartFromEnd(false);
-  }, [book]);
 
   // Ensure active custom font is loaded when reading
   useEffect(() => {
@@ -170,7 +176,7 @@ export function ReaderPage({
 
   const {
     chapter,
-    loading: chapterLoading,
+    loadedIndex,
     error: chapterError,
     retry: retryChapter,
   } = useChapterLoader({
@@ -178,10 +184,30 @@ export function ReaderPage({
     bookUrl,
     chapters,
     chapterIndex,
-    enabled: !tocLoading && !tocError,
+    enabled:
+      bookReady &&
+      (!book || hydratedBookUrl === book.bookUrl) &&
+      !tocLoading &&
+      !tocError,
   });
 
-  const { scheduleSave, flush } = useProgressSync(endpoint, book);
+  const { scheduleSave, flush, seedSavedProgress } = useProgressSync(
+    endpoint,
+    book
+  );
+  const contentReady = Boolean(chapter) && loadedIndex === chapterIndex;
+
+  const seededBookRef = useRef<string>('');
+  useEffect(() => {
+    if (!book || hydratedBookUrl !== book.bookUrl) return;
+    if (seededBookRef.current === book.bookUrl) return;
+    seededBookRef.current = book.bookUrl;
+    seedSavedProgress({
+      durChapterIndex: book.durChapterIndex ?? 0,
+      durChapterPos: book.durChapterPos ?? 0,
+      durChapterTitle: book.durChapterTitle || book.name,
+    });
+  }, [book, hydratedBookUrl, seedSavedProgress]);
 
   const currentChapterTitle =
     chapter?.title ||
@@ -194,19 +220,25 @@ export function ReaderPage({
       if (nextIndex < 0 || (chapters.length > 0 && nextIndex >= chapters.length)) {
         return;
       }
-      flush(false);
+      void flush(false);
       setStartFromEnd(fromEnd);
       setInitialCharPos(0);
+      liveCharPosRef.current = 0;
       setChapterIndex(nextIndex);
-      const nextTitle = chapters[nextIndex]?.title || `第 ${nextIndex + 1} 章`;
-      scheduleSave(
-        {
-          durChapterIndex: nextIndex,
-          durChapterPos: 0,
-          durChapterTitle: nextTitle,
-        },
-        true
-      );
+      if (!fromEnd) {
+        const nextTitle =
+          chapters[nextIndex]?.title || `第 ${nextIndex + 1} 章`;
+        scheduleSave(
+          {
+            durChapterIndex: nextIndex,
+            durChapterPos: 0,
+            durChapterTitle: nextTitle,
+          },
+          true
+        );
+      }
+      // fromEnd: never persist position 0; the chapter-end layout callback
+      // commits the real last-page offset once it is known.
     },
     [chapters, flush, scheduleSave]
   );
@@ -231,8 +263,14 @@ export function ReaderPage({
   }, [chapterIndex, chapters.length, goToChapter]);
 
   const handleScrollPosChange = useCallback(
-    (charPos: number, pct: number) => {
+    (
+      charPos: number,
+      pct: number,
+      options?: { userInitiated?: boolean }
+    ) => {
       setChapterPct(pct);
+      liveCharPosRef.current = charPos;
+      if (!options?.userInitiated) return;
       scheduleSave({
         durChapterIndex: chapterIndex,
         durChapterPos: charPos,
@@ -243,26 +281,58 @@ export function ReaderPage({
   );
 
   const handlePaginatedStateChange = useCallback(
-    (charPos: number, pct: number, info: PaginatedPageInfo) => {
+    (
+      charPos: number,
+      pct: number,
+      info: PaginatedPageInfo,
+      reason: PaginatedStateReason
+    ) => {
       setChapterPct(pct);
       setPageInfo(info);
-      scheduleSave({
+      liveCharPosRef.current = charPos;
+
+      // Reflow and initial layout are local-only: never overwrite cloud
+      // progress from a measurement pass.
+      if (reason === 'init' || reason === 'reflow') return;
+
+      const snapshot = {
         durChapterIndex: chapterIndex,
         durChapterPos: charPos,
         durChapterTitle: currentChapterTitle,
-      });
+      };
+
+      if (reason === 'chapter-end') {
+        setStartFromEnd(false);
+        scheduleSave(snapshot, true);
+        return;
+      }
+      scheduleSave(snapshot, false);
     },
     [chapterIndex, currentChapterTitle, scheduleSave]
   );
 
-  const handleBackToShelf = useCallback(() => {
-    flush(false);
+  const handleBackToShelf = useCallback(async () => {
+    await Promise.race([
+      flush(false),
+      new Promise<void>((resolve) => setTimeout(resolve, 800)),
+    ]);
     navigate({ view: 'bookshelf' });
   }, [flush]);
 
+  // Mode switches adjust state during render so the newly mounted reader
+  // receives the live character offset on its very first layout pass.
+  const [observedReadingMode, setObservedReadingMode] = useState(
+    settings.readingMode
+  );
+  if (observedReadingMode !== settings.readingMode) {
+    setObservedReadingMode(settings.readingMode);
+    setInitialCharPos(liveCharPosRef.current);
+    setStartFromEnd(false);
+  }
+
   const overlayOpen = tocOpen || aaOpen || Boolean(lightboxImg);
 
-  const { handleStageClick, handleTouchStart, handleTouchEnd } = useReaderInput({
+  const { handleStageClick } = useReaderInput({
     readingMode: settings.readingMode,
     tapZoneLayout: settings.tapZoneLayout,
     hudVisible,
@@ -271,6 +341,11 @@ export function ReaderPage({
     onHideHud: () => setHudVisible(false),
     onPrevPage: () => paginatedRef.current?.prevPage(),
     onNextPage: () => paginatedRef.current?.nextPage(),
+    onFirstPage: () => paginatedRef.current?.goToPage(0),
+    onLastPage: () => {
+      const handle = paginatedRef.current;
+      if (handle) handle.goToPage(handle.getPageInfo().totalPages - 1);
+    },
     onPrevChapter: () => handlePrevChapter(false),
     onNextChapter: () => handleNextChapter(),
     onToggleToc: () => {
@@ -331,6 +406,7 @@ export function ReaderPage({
     settings.textAlign,
     settings.paddingX,
     settings.paddingY,
+    settings.maxWidth,
     settings.columnGap,
     settings.twoColumnOnWide,
   ].join('|');
@@ -354,6 +430,11 @@ export function ReaderPage({
       ? `${pageInfo.page + 1} / ${pageInfo.totalPages} · ${overallPct}%`
       : `${overallPct}%`;
 
+  const pageLabel =
+    settings.readingMode === 'paginated'
+      ? `第 ${pageInfo.page + 1} / ${pageInfo.totalPages} 页`
+      : undefined;
+
   const chapterKey = `${bookUrl}::${chapterIndex}`;
 
   return (
@@ -376,11 +457,9 @@ export function ReaderPage({
       {/* Main Reading Stage */}
       <div
         onClick={handleStageClick}
-        onTouchStart={handleTouchStart}
-        onTouchEnd={handleTouchEnd}
         className="relative min-h-0 flex-1 overflow-hidden"
       >
-        {(tocLoading || (chapterLoading && !chapter)) && !tocError && !chapterError && (
+        {(tocLoading || !contentReady) && !tocError && !chapterError && (
           <div className="flex h-full flex-col items-center justify-center gap-3">
             <div
               className="h-6 w-6 animate-spin rounded-full border-2 border-t-transparent"
@@ -426,7 +505,7 @@ export function ReaderPage({
           </div>
         )}
 
-        {!tocError && !chapterError && chapter && (
+        {!tocError && !chapterError && chapter && contentReady && (
           settings.readingMode === 'scroll' ? (
             <ScrollReader
               chapter={chapter}
@@ -451,13 +530,16 @@ export function ReaderPage({
               startFromEnd={startFromEnd}
               paddingX={settings.paddingX}
               paddingY={settings.paddingY}
+              maxWidth={settings.maxWidth}
               columnGap={settings.columnGap}
               twoColumnOnWide={settings.twoColumnOnWide}
               pageAnimation={settings.pageAnimation}
               layoutToken={layoutToken}
+              interactionEnabled={!overlayOpen}
               onReachPrevChapter={() => handlePrevChapter(true)}
               onReachNextChapter={handleNextChapter}
               onPageStateChange={handlePaginatedStateChange}
+              onInteractionStart={() => setHudVisible(false)}
               onImageClick={(src, alt) => setLightboxImg({ src, alt })}
             />
           )
@@ -477,6 +559,7 @@ export function ReaderPage({
         chapterTitle={currentChapterTitle}
         chapters={chapters}
         chapterIndex={chapterIndex}
+        pageLabel={pageLabel}
         refreshingToc={tocRefreshing}
         fullscreenSupported={fullscreenSupported}
         isFullscreen={isFullscreen}

@@ -17,6 +17,7 @@ export interface ReaderHudProps {
   chapterTitle: string;
   chapters: BookChapter[];
   chapterIndex: number;
+  pageLabel?: string;
   refreshingToc: boolean;
   fullscreenSupported: boolean;
   isFullscreen: boolean;
@@ -36,6 +37,7 @@ export function ReaderHud({
   chapterTitle,
   chapters,
   chapterIndex,
+  pageLabel,
   refreshingToc,
   fullscreenSupported,
   isFullscreen,
@@ -166,8 +168,13 @@ export function ReaderHud({
             className="flex items-center justify-between px-0.5 text-[11px] tabular-nums"
             style={{ color: 'var(--r-ink-muted)' }}
           >
-            <span>
-              {displayIndex + 1} / {totalChapters}
+            <span className="flex items-center gap-1.5">
+              <span>
+                {displayIndex + 1} / {totalChapters}
+              </span>
+              {pageLabel && (
+                <span className="opacity-70">{pageLabel}</span>
+              )}
             </span>
             <span>{progressPct}%</span>
           </div>
